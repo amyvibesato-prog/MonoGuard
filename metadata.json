@@ -1,0 +1,6 @@
+{
+  "name": "MonoVoice",
+  "description": "Довірений Android-застосунок власника для атестації ключів та підтвердження дій MonoVoice.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
