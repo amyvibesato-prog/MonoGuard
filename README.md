@@ -43,8 +43,8 @@
 
 1. **Клонуйте репозиторій:**
    ```bash
-   git clone https://github.com/amyvibesato-prog/MonoVoice.git
-   cd MonoVoice
+   git clone https://github.com/amyvibesato-prog/MonoGuard.git
+   cd MonoGuard
    ```
 
 2. **Налаштуйте змінні середовища:**
