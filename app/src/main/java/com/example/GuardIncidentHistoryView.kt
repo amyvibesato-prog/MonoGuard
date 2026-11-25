@@ -16,9 +16,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AlertTriangle
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.MapPin
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.CircularProgressIndicator
@@ -288,7 +288,7 @@ private fun IncidentItemCard(incident: SecurityIncidentItem) {
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = Icons.Default.MapPin,
+                        imageVector = Icons.Default.LocationOn,
                         contentDescription = null,
                         tint = CyberYellow,
                         modifier = Modifier.size(13.dp)

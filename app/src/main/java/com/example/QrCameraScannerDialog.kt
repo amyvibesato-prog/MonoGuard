@@ -75,16 +75,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import android.widget.Toast
 import com.example.ui.theme.CyberCardDark
 import com.example.ui.theme.CyberCardSurface
 import com.example.ui.theme.CyberTextDark
 import com.example.ui.theme.CyberTextPrimary
 import com.example.ui.theme.CyberTextSecondary
 import com.example.ui.theme.CyberYellow
+import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
+import com.google.zxing.DecodeHintType
+import com.google.zxing.LuminanceSource
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.NotFoundException
 import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.common.GlobalHistogramBinarizer
 import com.google.zxing.common.HybridBinarizer
 import java.util.concurrent.Executors
 
@@ -184,13 +189,10 @@ fun QrCameraScannerDialog(
                             .border(2.dp, CyberYellow, RoundedCornerShape(14.dp))
                     ) {
                         CameraXPreview(
-                            onQrScanned = { scannedString ->
-                                val parsed = PairingRequest.fromUri(scannedString)
-                                if (parsed != null) {
-                                    vibrateFeedback(context)
-                                    onQrScanned(parsed)
-                                    onDismiss()
-                                }
+                            onQrScanned = { pairing ->
+                                vibrateFeedback(context)
+                                onQrScanned(pairing)
+                                onDismiss()
                             }
                         )
 
@@ -272,7 +274,7 @@ fun QrCameraScannerDialog(
 
 @Composable
 private fun CameraXPreview(
-    onQrScanned: (String) -> Unit
+    onQrScanned: (GuardPairingData) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -308,16 +310,23 @@ private fun CameraXPreview(
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
 
-                val reader = MultiFormatReader()
+                val hints = mapOf(
+                    DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
+                    DecodeHintType.TRY_HARDER to true,
+                    DecodeHintType.CHARACTER_SET to "UTF-8"
+                )
+                val reader = MultiFormatReader().apply { setHints(hints) }
 
                 imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                    Log.d("QrScanner", "Frame received: format=${imageProxy.format}, width=${imageProxy.width}, height=${imageProxy.height}")
                     if (!isScanned) {
                         val scannedText = decodeQrFromImageProxy(imageProxy, reader)
                         if (!scannedText.isNullOrBlank()) {
                             val pairing = GuardPairingData.fromUri(scannedText)
                             if (pairing != null && pairing.isValid) {
                                 isScanned = true
+                                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                    Toast.makeText(context, "QR-код успішно розпізнано!", Toast.LENGTH_SHORT).show()
+                                }
                                 onQrScanned(pairing)
                             }
                         }
@@ -412,20 +421,22 @@ private fun ScannerOverlay() {
 
 private fun decodeQrFromImageProxy(imageProxy: ImageProxy, reader: MultiFormatReader): String? {
     if (imageProxy.format != ImageFormat.YUV_420_888 && imageProxy.format != ImageFormat.NV21) {
-        Log.w("QrScanner", "Unsupported image format received: ${imageProxy.format}")
         return null
     }
 
-    val buffer = imageProxy.planes[0].buffer
-    val bytes = ByteArray(buffer.remaining())
-    buffer.get(bytes)
-
+    val yPlane = imageProxy.planes[0]
+    val yBuffer = yPlane.buffer
+    val rowStride = yPlane.rowStride
     val width = imageProxy.width
     val height = imageProxy.height
 
+    val bytes = ByteArray(yBuffer.remaining())
+    yBuffer.get(bytes)
+
+    // PlanarYUVLuminanceSource dataWidth MUST be rowStride to account for padding
     val source = PlanarYUVLuminanceSource(
         bytes,
-        width,
+        rowStride,
         height,
         0,
         0,
@@ -434,21 +445,54 @@ private fun decodeQrFromImageProxy(imageProxy: ImageProxy, reader: MultiFormatRe
         false
     )
 
-    val binaryBitmap = BinaryBitmap(HybridBinarizer(source))
+    val rotation = imageProxy.imageInfo.rotationDegrees
+    val rotatedSource: LuminanceSource = if (rotation == 90 || rotation == 180 || rotation == 270) {
+        var s: LuminanceSource = source
+        val times = (360 - rotation) / 90
+        for (i in 0 until (times % 4)) {
+            s = s.rotateCounterClockwise()
+        }
+        s
+    } else {
+        source
+    }
 
-    return try {
-        val result = reader.decode(binaryBitmap)
-        Log.d("QrScanner", "Successfully decoded barcode: ${result.text}")
-        result.text
-    } catch (_: NotFoundException) {
-        // Expected when scanning frames without QR code
-        null
-    } catch (e: Exception) {
-        Log.w("QrScanner", "Error decoding barcode frame: ${e.message}", e)
-        null
+    // Try decoding rotated source with HybridBinarizer
+    try {
+        val bitmap = BinaryBitmap(HybridBinarizer(rotatedSource))
+        val result = reader.decode(bitmap)
+        Log.d("QrScanner", "Successfully decoded QR: ${result.text}")
+        return result.text
+    } catch (_: Exception) {
     } finally {
         reader.reset()
     }
+
+    // Try decoding rotated source with GlobalHistogramBinarizer
+    try {
+        val bitmap = BinaryBitmap(GlobalHistogramBinarizer(rotatedSource))
+        val result = reader.decode(bitmap)
+        Log.d("QrScanner", "Successfully decoded QR (GlobalHistogram): ${result.text}")
+        return result.text
+    } catch (_: Exception) {
+    } finally {
+        reader.reset()
+    }
+
+    // Fallback: try unrotated source if rotation was non-zero
+    if (rotation != 0) {
+        try {
+            val bitmap = BinaryBitmap(HybridBinarizer(source))
+            val result = reader.decode(bitmap)
+            Log.d("QrScanner", "Successfully decoded QR (unrotated): ${result.text}")
+            return result.text
+        } catch (_: Exception) {
+        } finally {
+            reader.reset()
+        }
+    }
+
+    return null
 }
 
 private fun vibrateFeedback(context: Context) {

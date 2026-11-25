@@ -1,53 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <!-- Golden collar/shoulders -->
-    <path
-        android:fillColor="#FFD215"
-        android:pathData="M38,76 L54,84 L70,76 L66,88 L42,88 Z" />
-    
-    <!-- Monitor Head and Ears Shadow/Base -->
-    <path
-        android:fillColor="#101214"
-        android:pathData="M34,42 L42,28 L50,40 L58,40 L66,28 L74,42 L76,72 L32,72 Z" />
-    
-    <!-- Monitor Screen Front -->
-    <path
-        android:fillColor="#1B1E24"
-        android:pathData="M36,44 L72,44 L72,70 L36,70 Z" />
-
-    <!-- Yellow Golden Grin and Eyes -->
-    <!-- Eyes -->
-    <path
-        android:fillColor="#FFD215"
-        android:pathData="M42,50 Q46,47 50,51 L48,53 Q45,50 42,52 Z" />
-    <path
-        android:fillColor="#FFD215"
-        android:pathData="M58,51 Q62,47 66,50 L66,52 Q63,50 60,53 Z" />
-
-    <!-- Big Cyber Grin with Tooth Bars -->
-    <path
-        android:fillColor="#FFD215"
-        android:pathData="M40,58 Q54,68 68,58 L68,61 Q54,71 40,61 Z" />
-    <!-- Tooth Separators -->
-    <path
-        android:fillColor="#1B1E24"
-        android:pathData="M46,59 L46,65 L48,65 L48,59 Z" />
-    <path
-        android:fillColor="#1B1E24"
-        android:pathData="M53,60 L53,67 L55,67 L55,60 Z" />
-    <path
-        android:fillColor="#1B1E24"
-        android:pathData="M60,59 L60,65 L62,65 L62,59 Z" />
-
-    <!-- Security Key Icon Badge on chest -->
-    <path
-        android:fillColor="#FFD215"
-        android:pathData="M52,78 L56,78 L56,86 L54,86 L54,83 L52,83 Z" />
-    <path
-        android:fillColor="#FFD215"
-        android:pathData="M54,76 A2.5,2.5 0 1 0 54,76.01" />
-</vector>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="66dp"
+        android:height="66dp"
+        android:drawable="@drawable/app_logo"
+        android:gravity="center" />
+</layer-list>

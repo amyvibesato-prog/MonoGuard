@@ -17,35 +17,104 @@ data class GuardPairingData(
     val device: String
 ) {
     val isValid: Boolean
-        get() = endpoint.isNotBlank() && secret.isNotBlank()
+        get() = endpoint.isNotBlank()
 
     companion object {
         fun fromUri(uriString: String): GuardPairingData? {
             val clean = uriString.trim()
             if (clean.isBlank()) return null
             return try {
+                // 1. Try JSON parsing
+                if (clean.startsWith("{") && clean.endsWith("}")) {
+                    try {
+                        val json = org.json.JSONObject(clean)
+                        val endpoint = json.optString("endpoint", json.optString("url", json.optString("endpointUrl", "")))
+                        val secret = json.optString("secret", json.optString("guardSecret", json.optString("code", "")))
+                        val phone = json.optString("phone", "")
+                        val device = json.optString("device", "")
+                        if (endpoint.isNotBlank() || secret.isNotBlank()) {
+                            return GuardPairingData(
+                                rawUri = clean,
+                                endpoint = endpoint,
+                                secret = secret,
+                                phone = phone,
+                                device = device
+                            )
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+
                 val uri = Uri.parse(clean)
-                val scheme = uri.scheme?.lowercase()
-                val host = uri.host?.lowercase()
+                val scheme = uri.scheme?.lowercase().orEmpty()
 
-                if ((scheme == "monovoice-guard" || scheme == "monovoice") &&
-                    (host == "pair" || host.isNullOrBlank())
-                ) {
-                    val endpoint = uri.getQueryParameter("endpoint").orEmpty()
-                    val secret = uri.getQueryParameter("secret").orEmpty()
-                    val phone = uri.getQueryParameter("phone").orEmpty()
-                    val device = uri.getQueryParameter("device").orEmpty()
+                var endpoint = uri.getQueryParameter("endpoint").orEmpty()
+                var secret = uri.getQueryParameter("secret").orEmpty()
+                var phone = uri.getQueryParameter("phone").orEmpty()
+                var device = uri.getQueryParameter("device").orEmpty()
 
-                    GuardPairingData(
+                if (endpoint.isBlank()) {
+                    endpoint = uri.getQueryParameter("url").orEmpty().ifBlank {
+                        uri.getQueryParameter("endpointUrl").orEmpty()
+                    }
+                }
+                if (secret.isBlank()) {
+                    secret = uri.getQueryParameter("key").orEmpty().ifBlank {
+                        uri.getQueryParameter("code").orEmpty().ifBlank {
+                            uri.getQueryParameter("guardSecret").orEmpty()
+                        }
+                    }
+                }
+
+                // If query params endpoint/secret were in the URI
+                if (endpoint.isNotBlank() || secret.isNotBlank()) {
+                    return GuardPairingData(
                         rawUri = clean,
                         endpoint = endpoint,
                         secret = secret,
                         phone = phone,
                         device = device
                     )
-                } else null
+                }
+
+                // If scheme is monovoice / monovoice-guard
+                if (scheme == "monovoice-guard" || scheme == "monovoice") {
+                    return GuardPairingData(
+                        rawUri = clean,
+                        endpoint = endpoint,
+                        secret = secret,
+                        phone = phone,
+                        device = device
+                    )
+                }
+
+                // If HTTP or HTTPS URL, use clean as endpoint
+                if (scheme == "http" || scheme == "https") {
+                    return GuardPairingData(
+                        rawUri = clean,
+                        endpoint = clean,
+                        secret = secret,
+                        phone = phone,
+                        device = device
+                    )
+                }
+
+                // Fallback for any other scanned text
+                GuardPairingData(
+                    rawUri = clean,
+                    endpoint = clean,
+                    secret = secret,
+                    phone = phone,
+                    device = device
+                )
             } catch (_: Exception) {
-                null
+                GuardPairingData(
+                    rawUri = clean,
+                    endpoint = clean,
+                    secret = "",
+                    phone = "",
+                    device = ""
+                )
             }
         }
     }
