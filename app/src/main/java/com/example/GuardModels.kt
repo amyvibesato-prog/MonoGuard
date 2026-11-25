@@ -17,7 +17,7 @@ data class GuardPairingData(
     val device: String
 ) {
     val isValid: Boolean
-        get() = endpoint.isNotBlank()
+        get() = endpoint.isNotBlank() && secret.isNotBlank()
 
     companion object {
         fun fromUri(uriString: String): GuardPairingData? {
@@ -28,11 +28,11 @@ data class GuardPairingData(
                 if (clean.startsWith("{") && clean.endsWith("}")) {
                     try {
                         val json = org.json.JSONObject(clean)
-                        val endpoint = json.optString("endpoint", json.optString("url", json.optString("endpointUrl", "")))
-                        val secret = json.optString("secret", json.optString("guardSecret", json.optString("code", "")))
-                        val phone = json.optString("phone", "")
-                        val device = json.optString("device", "")
-                        if (endpoint.isNotBlank() || secret.isNotBlank()) {
+                        val endpoint = json.optString("endpoint", json.optString("url", json.optString("endpointUrl", ""))).trim()
+                        val secret = json.optString("secret", json.optString("guardSecret", json.optString("code", ""))).trim()
+                        val phone = json.optString("phone", "").trim()
+                        val device = json.optString("device", "").trim()
+                        if (endpoint.isNotBlank() && secret.isNotBlank()) {
                             return GuardPairingData(
                                 rawUri = clean,
                                 endpoint = endpoint,
@@ -43,78 +43,43 @@ data class GuardPairingData(
                         }
                     } catch (_: Exception) {
                     }
+                    return null
                 }
 
                 val uri = Uri.parse(clean)
-                val scheme = uri.scheme?.lowercase().orEmpty()
+                if (uri.isOpaque) return null
 
-                var endpoint = uri.getQueryParameter("endpoint").orEmpty()
-                var secret = uri.getQueryParameter("secret").orEmpty()
-                var phone = uri.getQueryParameter("phone").orEmpty()
-                var device = uri.getQueryParameter("device").orEmpty()
+                var endpoint = uri.getQueryParameter("endpoint").orEmpty().trim()
+                var secret = uri.getQueryParameter("secret").orEmpty().trim()
+                val phone = uri.getQueryParameter("phone").orEmpty().trim()
+                val device = uri.getQueryParameter("device").orEmpty().trim()
 
                 if (endpoint.isBlank()) {
-                    endpoint = uri.getQueryParameter("url").orEmpty().ifBlank {
-                        uri.getQueryParameter("endpointUrl").orEmpty()
+                    endpoint = uri.getQueryParameter("url").orEmpty().trim().ifBlank {
+                        uri.getQueryParameter("endpointUrl").orEmpty().trim()
                     }
                 }
                 if (secret.isBlank()) {
-                    secret = uri.getQueryParameter("key").orEmpty().ifBlank {
-                        uri.getQueryParameter("code").orEmpty().ifBlank {
-                            uri.getQueryParameter("guardSecret").orEmpty()
+                    secret = uri.getQueryParameter("key").orEmpty().trim().ifBlank {
+                        uri.getQueryParameter("code").orEmpty().trim().ifBlank {
+                            uri.getQueryParameter("guardSecret").orEmpty().trim()
                         }
                     }
                 }
 
-                // If query params endpoint/secret were in the URI
-                if (endpoint.isNotBlank() || secret.isNotBlank()) {
-                    return GuardPairingData(
+                if (endpoint.isNotBlank() && secret.isNotBlank()) {
+                    GuardPairingData(
                         rawUri = clean,
                         endpoint = endpoint,
                         secret = secret,
                         phone = phone,
                         device = device
                     )
+                } else {
+                    null
                 }
-
-                // If scheme is monovoice / monovoice-guard
-                if (scheme == "monovoice-guard" || scheme == "monovoice") {
-                    return GuardPairingData(
-                        rawUri = clean,
-                        endpoint = endpoint,
-                        secret = secret,
-                        phone = phone,
-                        device = device
-                    )
-                }
-
-                // If HTTP or HTTPS URL, use clean as endpoint
-                if (scheme == "http" || scheme == "https") {
-                    return GuardPairingData(
-                        rawUri = clean,
-                        endpoint = clean,
-                        secret = secret,
-                        phone = phone,
-                        device = device
-                    )
-                }
-
-                // Fallback for any other scanned text
-                GuardPairingData(
-                    rawUri = clean,
-                    endpoint = clean,
-                    secret = secret,
-                    phone = phone,
-                    device = device
-                )
             } catch (_: Exception) {
-                GuardPairingData(
-                    rawUri = clean,
-                    endpoint = clean,
-                    secret = "",
-                    phone = "",
-                    device = ""
-                )
+                null
             }
         }
     }
@@ -154,11 +119,23 @@ data class ConnectivityTestResponse(
     val message: String? = null
 )
 
+@JsonClass(generateAdapter = true)
+data class GuardTimeResponse(
+    val success: Boolean = true,
+    val serverTimeMs: Long = 0L,
+    val stepSeconds: Int = 15
+)
+
 interface MonoVoiceGuardApi {
     @GET
     suspend fun getIncidents(
         @Url url: String
     ): Response<IncidentsResponse>
+
+    @GET
+    suspend fun getServerTime(
+        @Url url: String
+    ): Response<GuardTimeResponse>
 
     @POST
     suspend fun sendConnectivityTest(

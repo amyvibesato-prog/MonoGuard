@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.Log
@@ -17,6 +19,8 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -66,15 +70,16 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import android.widget.Toast
 import com.example.ui.theme.CyberCardDark
 import com.example.ui.theme.CyberCardSurface
@@ -92,6 +97,7 @@ import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.common.GlobalHistogramBinarizer
 import com.google.zxing.common.HybridBinarizer
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -279,34 +285,56 @@ private fun CameraXPreview(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
-    var isScanned by remember { mutableStateOf(false) }
+    val isScanned = remember { AtomicBoolean(false) }
+    val isDisposed = remember { AtomicBoolean(false) }
+    var cameraError by remember { mutableStateOf<String?>(null) }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            cameraExecutor.shutdown()
+    val previewView = remember(context) {
+        PreviewView(context).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            scaleType = PreviewView.ScaleType.FILL_CENTER
         }
     }
 
-    AndroidView(
-        factory = { ctx ->
-            PreviewView(ctx).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-                scaleType = PreviewView.ScaleType.FILL_CENTER
-            }
-        },
-        update = { previewView ->
-            val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-            cameraProviderFuture.addListener({
+    DisposableEffect(previewView, lifecycleOwner) {
+        isDisposed.set(false)
+        var boundCameraProvider: ProcessCameraProvider? = null
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+
+        cameraProviderFuture.addListener({
+            if (isDisposed.get()) return@addListener
+            try {
                 val cameraProvider = cameraProviderFuture.get()
+                if (isDisposed.get()) return@addListener
+
+                val cameraSelector = when {
+                    cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
+                    cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
+                    else -> {
+                        cameraError = "Камеру не знайдено на цьому пристрої"
+                        return@addListener
+                    }
+                }
+
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
+                val resolutionSelector = ResolutionSelector.Builder()
+                    .setResolutionStrategy(
+                        ResolutionStrategy(
+                            Size(1280, 720),
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                        )
+                    )
+                    .build()
+
                 val imageAnalysis = ImageAnalysis.Builder()
-                    .setTargetResolution(Size(1280, 720))
+                    .setResolutionSelector(resolutionSelector)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
 
@@ -318,38 +346,77 @@ private fun CameraXPreview(
                 val reader = MultiFormatReader().apply { setHints(hints) }
 
                 imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                    if (!isScanned) {
-                        val scannedText = decodeQrFromImageProxy(imageProxy, reader)
-                        if (!scannedText.isNullOrBlank()) {
-                            val pairing = GuardPairingData.fromUri(scannedText)
-                            if (pairing != null && pairing.isValid) {
-                                isScanned = true
-                                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                    Toast.makeText(context, "QR-код успішно розпізнано!", Toast.LENGTH_SHORT).show()
+                    try {
+                        if (!isScanned.get() && !isDisposed.get()) {
+                            val scannedText = decodeQrFromImageProxy(imageProxy, reader)
+                            if (!scannedText.isNullOrBlank()) {
+                                val pairing = GuardPairingData.fromUri(scannedText)
+                                if (pairing != null && pairing.isValid && isScanned.compareAndSet(false, true)) {
+                                    Handler(Looper.getMainLooper()).post {
+                                        if (!isDisposed.get()) {
+                                            Toast.makeText(context, "QR-код успішно розпізнано!", Toast.LENGTH_SHORT).show()
+                                            onQrScanned(pairing)
+                                        }
+                                    }
                                 }
-                                onQrScanned(pairing)
                             }
                         }
+                    } catch (e: Throwable) {
+                        Log.w("QrScanner", "Error processing camera frame", e)
+                    } finally {
+                        imageProxy.close()
                     }
-                    imageProxy.close()
                 }
 
-                try {
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                        imageAnalysis
-                    )
-                    Log.d("QrScanner", "CameraX bound successfully with Preview and ImageAnalysis analyzer")
-                } catch (e: Exception) {
-                    Log.e("QrScanner", "Failed to bind CameraX lifecycle", e)
-                }
-            }, ContextCompat.getMainExecutor(context))
-        },
-        modifier = Modifier.fillMaxSize()
-    )
+                cameraProvider.unbindAll()
+                cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    cameraSelector,
+                    preview,
+                    imageAnalysis
+                )
+                boundCameraProvider = cameraProvider
+                cameraError = null
+                Log.d("QrScanner", "CameraX bound successfully with Preview and ImageAnalysis analyzer")
+            } catch (e: Throwable) {
+                Log.e("QrScanner", "Failed to start CameraX", e)
+                cameraError = "Не вдалося запустити камеру"
+            }
+        }, ContextCompat.getMainExecutor(context))
+
+        onDispose {
+            isDisposed.set(true)
+            try {
+                boundCameraProvider?.unbindAll()
+            } catch (e: Throwable) {
+                Log.w("QrScanner", "Error unbinding CameraX", e)
+            }
+            cameraExecutor.shutdown()
+        }
+    }
+
+    if (cameraError != null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(CyberCardSurface),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = cameraError!!,
+                color = CyberTextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(24.dp)
+            )
+        }
+    } else {
+        AndroidView(
+            factory = { previewView },
+            modifier = Modifier.fillMaxSize()
+        )
+    }
 }
 
 @Composable
@@ -420,79 +487,178 @@ private fun ScannerOverlay() {
 }
 
 private fun decodeQrFromImageProxy(imageProxy: ImageProxy, reader: MultiFormatReader): String? {
-    if (imageProxy.format != ImageFormat.YUV_420_888 && imageProxy.format != ImageFormat.NV21) {
-        return null
-    }
-
-    val yPlane = imageProxy.planes[0]
-    val yBuffer = yPlane.buffer
-    val rowStride = yPlane.rowStride
-    val width = imageProxy.width
-    val height = imageProxy.height
-
-    val bytes = ByteArray(yBuffer.remaining())
-    yBuffer.get(bytes)
-
-    // PlanarYUVLuminanceSource dataWidth MUST be rowStride to account for padding
-    val source = PlanarYUVLuminanceSource(
-        bytes,
-        rowStride,
-        height,
-        0,
-        0,
-        width,
-        height,
-        false
-    )
-
-    val rotation = imageProxy.imageInfo.rotationDegrees
-    val rotatedSource: LuminanceSource = if (rotation == 90 || rotation == 180 || rotation == 270) {
-        var s: LuminanceSource = source
-        val times = (360 - rotation) / 90
-        for (i in 0 until (times % 4)) {
-            s = s.rotateCounterClockwise()
+    return try {
+        if (imageProxy.format != ImageFormat.YUV_420_888 && imageProxy.format != ImageFormat.NV21) {
+            return null
         }
-        s
-    } else {
-        source
-    }
 
-    // Try decoding rotated source with HybridBinarizer
+        val yPlane = imageProxy.planes.firstOrNull() ?: return null
+        val yBuffer = yPlane.buffer
+        val rowStride = yPlane.rowStride
+        val pixelStride = yPlane.pixelStride
+        val width = imageProxy.width
+        val height = imageProxy.height
+        if (width <= 0 || height <= 0) return null
+
+        val packedY = extractPackedLuminance(yBuffer, width, height, rowStride, pixelStride)
+        val rotation = imageProxy.imageInfo.rotationDegrees
+
+        val (rotatedBytes, rotW, rotH) = rotateLuminanceBytes(packedY, width, height, rotation)
+        val rotatedSource = PlanarYUVLuminanceSource(
+            rotatedBytes,
+            rotW,
+            rotH,
+            0,
+            0,
+            rotW,
+            rotH,
+            false
+        )
+
+        tryDecodeSource(rotatedSource, reader)?.let { return it }
+
+        if (rotation != 0) {
+            val unrotatedSource = PlanarYUVLuminanceSource(
+                packedY,
+                width,
+                height,
+                0,
+                0,
+                width,
+                height,
+                false
+            )
+            tryDecodeSource(unrotatedSource, reader)?.let { return it }
+        }
+
+        null
+    } catch (e: Throwable) {
+        Log.w("QrScanner", "Error decoding QR frame: ${e.message}")
+        null
+    }
+}
+
+private fun tryDecodeSource(source: LuminanceSource, reader: MultiFormatReader): String? {
+    // 1. Standard HybridBinarizer
     try {
-        val bitmap = BinaryBitmap(HybridBinarizer(rotatedSource))
-        val result = reader.decode(bitmap)
+        val result = reader.decodeWithState(BinaryBitmap(HybridBinarizer(source)))
         Log.d("QrScanner", "Successfully decoded QR: ${result.text}")
         return result.text
-    } catch (_: Exception) {
+    } catch (_: NotFoundException) {
+    } catch (_: Throwable) {
     } finally {
         reader.reset()
     }
 
-    // Try decoding rotated source with GlobalHistogramBinarizer
+    // 2. GlobalHistogramBinarizer for low-contrast / screen glare frames
     try {
-        val bitmap = BinaryBitmap(GlobalHistogramBinarizer(rotatedSource))
-        val result = reader.decode(bitmap)
+        val result = reader.decodeWithState(BinaryBitmap(GlobalHistogramBinarizer(source)))
         Log.d("QrScanner", "Successfully decoded QR (GlobalHistogram): ${result.text}")
         return result.text
-    } catch (_: Exception) {
+    } catch (_: NotFoundException) {
+    } catch (_: Throwable) {
     } finally {
         reader.reset()
     }
 
-    // Fallback: try unrotated source if rotation was non-zero
-    if (rotation != 0) {
-        try {
-            val bitmap = BinaryBitmap(HybridBinarizer(source))
-            val result = reader.decode(bitmap)
-            Log.d("QrScanner", "Successfully decoded QR (unrotated): ${result.text}")
-            return result.text
-        } catch (_: Exception) {
-        } finally {
-            reader.reset()
-        }
+    // 3. Inverted luminance for light-on-dark QR codes
+    try {
+        val result = reader.decodeWithState(BinaryBitmap(HybridBinarizer(source.invert())))
+        Log.d("QrScanner", "Successfully decoded QR (Inverted): ${result.text}")
+        return result.text
+    } catch (_: NotFoundException) {
+    } catch (_: Throwable) {
+    } finally {
+        reader.reset()
     }
 
     return null
+}
+
+internal fun extractPackedLuminance(
+    buffer: java.nio.ByteBuffer,
+    width: Int,
+    height: Int,
+    rowStride: Int,
+    pixelStride: Int
+): ByteArray {
+    val dup = buffer.duplicate()
+    dup.rewind()
+    val limit = dup.limit()
+    val output = ByteArray(width * height)
+
+    if (pixelStride == 1 && rowStride == width && limit >= output.size) {
+        dup.get(output, 0, output.size)
+        return output
+    }
+
+    val rowBuffer = ByteArray(rowStride.coerceAtLeast(width))
+    for (row in 0 until height) {
+        val rowStart = row * rowStride
+        if (rowStart >= limit) break
+        val bytesAvailable = (limit - rowStart).coerceAtLeast(0)
+        val rowDstOffset = row * width
+
+        if (pixelStride == 1) {
+            val copyLen = minOf(width, bytesAvailable)
+            dup.position(rowStart)
+            dup.get(output, rowDstOffset, copyLen)
+        } else {
+            val neededBytes = (width - 1) * pixelStride + 1
+            val readLen = minOf(neededBytes, bytesAvailable)
+            dup.position(rowStart)
+            dup.get(rowBuffer, 0, readLen)
+            for (col in 0 until width) {
+                val srcIdx = col * pixelStride
+                if (srcIdx < readLen) {
+                    output[rowDstOffset + col] = rowBuffer[srcIdx]
+                }
+            }
+        }
+    }
+    return output
+}
+
+internal fun rotateLuminanceBytes(
+    data: ByteArray,
+    width: Int,
+    height: Int,
+    rotationDegrees: Int
+): Triple<ByteArray, Int, Int> {
+    val normalized = ((rotationDegrees % 360) + 360) % 360
+    return when (normalized) {
+        90 -> {
+            val out = ByteArray(width * height)
+            for (y in 0 until height) {
+                val rowOff = y * width
+                val dstX = height - 1 - y
+                for (x in 0 until width) {
+                    out[x * height + dstX] = data[rowOff + x]
+                }
+            }
+            Triple(out, height, width)
+        }
+        180 -> {
+            val out = ByteArray(width * height)
+            val total = width * height
+            for (i in 0 until total) {
+                out[total - 1 - i] = data[i]
+            }
+            Triple(out, width, height)
+        }
+        270 -> {
+            val out = ByteArray(width * height)
+            for (y in 0 until height) {
+                val rowOff = y * width
+                for (x in 0 until width) {
+                    val dstY = width - 1 - x
+                    out[dstY * height + y] = data[rowOff + x]
+                }
+            }
+            Triple(out, height, width)
+        }
+        else -> Triple(data, width, height)
+    }
 }
 
 private fun vibrateFeedback(context: Context) {

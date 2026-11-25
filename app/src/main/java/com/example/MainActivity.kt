@@ -37,8 +37,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -59,6 +61,14 @@ import com.example.ui.theme.CyberTextPrimary
 import com.example.ui.theme.CyberTextSecondary
 import com.example.ui.theme.CyberYellow
 import com.example.ui.theme.MonoVoiceTheme
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import retrofit2.Retrofit
+import retrofit2.converter.moshi.MoshiConverterFactory
+import java.util.concurrent.TimeUnit
 
 class MainActivity : FragmentActivity() {
 
@@ -68,6 +78,7 @@ class MainActivity : FragmentActivity() {
     private val phoneNumberState = mutableStateOf("")
     private val endpointUrlState = mutableStateOf("")
     private val deviceNameState = mutableStateOf("")
+    private val timeOffsetMsState = mutableLongStateOf(0L)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,6 +97,13 @@ class MainActivity : FragmentActivity() {
                 val phoneNumber by phoneNumberState
                 val endpointUrl by endpointUrlState
                 val deviceName by deviceNameState
+                val timeOffsetMs by timeOffsetMsState
+
+                LaunchedEffect(isPaired, endpointUrl) {
+                    if (isPaired && endpointUrl.isNotBlank()) {
+                        syncServerTime(endpointUrl)
+                    }
+                }
 
                 MonoVoiceGuardScreen(
                     isPaired = isPaired,
@@ -93,7 +111,9 @@ class MainActivity : FragmentActivity() {
                     phoneNumber = phoneNumber,
                     endpointUrl = endpointUrl,
                     deviceName = deviceName,
+                    timeOffsetMs = timeOffsetMs,
                     onSavePairing = { data ->
+                        if (!data.isValid) return@MonoVoiceGuardScreen
                         storage.savePairing(data.endpoint, data.secret, data.phone, data.device)
                         refreshStateFromStorage()
                         Toast.makeText(this, "MonoVoice Guard успішно підключено!", Toast.LENGTH_LONG).show()
@@ -130,6 +150,45 @@ class MainActivity : FragmentActivity() {
         phoneNumberState.value = storage.phoneNumber
         endpointUrlState.value = storage.endpointUrl
         deviceNameState.value = storage.deviceName
+        timeOffsetMsState.longValue = storage.serverTimeOffsetMs
+    }
+
+    private suspend fun syncServerTime(endpoint: String) {
+        val cleanEndpoint = endpoint.trim().removeSuffix("/")
+        if (cleanEndpoint.isBlank()) return
+        try {
+            val offset = withContext(Dispatchers.IO) {
+                val url = "$cleanEndpoint/api/admin/guard/time"
+                val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+                val okHttp = OkHttpClient.Builder()
+                    .connectTimeout(5, TimeUnit.SECONDS)
+                    .readTimeout(5, TimeUnit.SECONDS)
+                    .build()
+                val retrofit = Retrofit.Builder()
+                    .baseUrl("$cleanEndpoint/")
+                    .client(okHttp)
+                    .addConverterFactory(MoshiConverterFactory.create(moshi))
+                    .build()
+                val api = retrofit.create(MonoVoiceGuardApi::class.java)
+
+                val t0 = System.currentTimeMillis()
+                val response = api.getServerTime(url)
+                val t1 = System.currentTimeMillis()
+
+                val body = response.body()
+                if (response.isSuccessful && body != null && body.success && body.serverTimeMs > 0L) {
+                    body.serverTimeMs - (t0 + (t1 - t0) / 2L)
+                } else {
+                    null
+                }
+            }
+            if (offset != null && storage.isPaired) {
+                storage.serverTimeOffsetMs = offset
+                timeOffsetMsState.longValue = offset
+            }
+        } catch (_: Exception) {
+            // Fail silently and keep existing offset when offline
+        }
     }
 }
 
@@ -140,6 +199,7 @@ fun MonoVoiceGuardScreen(
     phoneNumber: String,
     endpointUrl: String,
     deviceName: String,
+    timeOffsetMs: Long = 0L,
     onSavePairing: (GuardPairingData) -> Unit,
     onUnpair: () -> Unit
 ) {
@@ -208,6 +268,7 @@ fun MonoVoiceGuardScreen(
                                 isPaired = isPaired,
                                 secretKey = secretKey,
                                 phoneNumber = phoneNumber,
+                                timeOffsetMs = timeOffsetMs,
                                 onOpenScanner = { showQrScannerDialog = true }
                             )
                         }

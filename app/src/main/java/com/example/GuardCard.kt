@@ -93,6 +93,7 @@ fun GuardCard(
     isPaired: Boolean,
     secretKey: String,
     phoneNumber: String,
+    timeOffsetMs: Long = 0L,
     onOpenScanner: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -104,13 +105,18 @@ fun GuardCard(
     var progressFraction by remember { mutableFloatStateOf(0f) }
 
     // Live 100ms ticker for 15s Steam Guard TOTP
-    LaunchedEffect(isPaired, secretKey) {
-        if (!isPaired || secretKey.isBlank()) return@LaunchedEffect
+    LaunchedEffect(isPaired, secretKey, timeOffsetMs) {
+        if (!isPaired || secretKey.isBlank()) {
+            currentCode = "000000"
+            secondsLeft = GuardCrypto.STEP_SECONDS
+            progressFraction = 0f
+            return@LaunchedEffect
+        }
         while (isActive) {
             val now = System.currentTimeMillis()
-            currentCode = GuardCrypto.calculateCurrentCode(secretKey, now)
-            secondsLeft = GuardCrypto.getSecondsRemaining(now)
-            progressFraction = GuardCrypto.getWindowProgressFraction(now)
+            currentCode = GuardCrypto.calculateCurrentCode(secretKey, now, timeOffsetMs)
+            secondsLeft = GuardCrypto.getSecondsRemaining(now, timeOffsetMs)
+            progressFraction = GuardCrypto.getWindowProgressFraction(now, timeOffsetMs)
             delay(100L)
         }
     }

@@ -34,6 +34,10 @@ class GuardStorage private constructor(context: Context) {
         get() = prefs.getLong(KEY_PAIRED_AT, 0L)
         private set(value) = prefs.edit().putLong(KEY_PAIRED_AT, value).apply()
 
+    var serverTimeOffsetMs: Long
+        get() = prefs.getLong(KEY_TIME_OFFSET_MS, 0L)
+        set(value) = prefs.edit().putLong(KEY_TIME_OFFSET_MS, value).apply()
+
     fun savePairing(endpoint: String, secret: String, phone: String, device: String) {
         prefs.edit()
             .putBoolean(KEY_IS_PAIRED, true)
@@ -50,7 +54,10 @@ class GuardStorage private constructor(context: Context) {
             .putBoolean(KEY_IS_PAIRED, false)
             .remove(KEY_SECRET)
             .remove(KEY_PHONE)
+            .remove(KEY_ENDPOINT)
+            .remove(KEY_DEVICE_NAME)
             .remove(KEY_PAIRED_AT)
+            .remove(KEY_TIME_OFFSET_MS)
             .apply()
     }
 
@@ -62,6 +69,7 @@ class GuardStorage private constructor(context: Context) {
         private const val KEY_ENDPOINT = "guard_endpoint_url"
         private const val KEY_DEVICE_NAME = "guard_device_name"
         private const val KEY_PAIRED_AT = "guard_paired_at"
+        private const val KEY_TIME_OFFSET_MS = "guard_time_offset_ms"
 
         @Volatile
         private var INSTANCE: GuardStorage? = null

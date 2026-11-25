@@ -1,6 +1,7 @@
 package com.example
 
 import java.nio.ByteBuffer
+import java.util.Locale
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -11,10 +12,15 @@ object GuardCrypto {
      * Calculates the 6-digit TOTP code for the current 15-second window
      * matching the website's GuardService implementation.
      */
-    fun calculateCurrentCode(secretHex: String, nowMs: Long = System.currentTimeMillis()): String {
+    fun calculateCurrentCode(
+        secretHex: String,
+        nowMs: Long = System.currentTimeMillis(),
+        timeOffsetMs: Long = 0L
+    ): String {
         if (secretHex.isBlank()) return "000000"
         return try {
-            val counter = (nowMs / 1000L) / STEP_SECONDS.toLong()
+            val effectiveNowMs = nowMs + timeOffsetMs
+            val counter = (effectiveNowMs / 1000L) / STEP_SECONDS.toLong()
             val counterBytes = ByteBuffer.allocate(8).putLong(counter).array()
 
             val secretBytes = hexStringToByteArray(secretHex.trim())
@@ -32,7 +38,7 @@ object GuardCrypto {
                     (hmac[offset + 3].toInt() and 0xff)
 
             val otp = binary % 1000000
-            String.format("%06d", otp)
+            String.format(Locale.US, "%06d", otp)
         } catch (_: Exception) {
             "000000"
         }
@@ -41,8 +47,12 @@ object GuardCrypto {
     /**
      * Calculates remaining seconds in the current 15-second window
      */
-    fun getSecondsRemaining(nowMs: Long = System.currentTimeMillis()): Int {
-        val seconds = (nowMs / 1000L) % STEP_SECONDS
+    fun getSecondsRemaining(
+        nowMs: Long = System.currentTimeMillis(),
+        timeOffsetMs: Long = 0L
+    ): Int {
+        val effectiveNowMs = nowMs + timeOffsetMs
+        val seconds = (((effectiveNowMs / 1000L) % STEP_SECONDS) + STEP_SECONDS) % STEP_SECONDS
         val remaining = STEP_SECONDS - seconds.toInt()
         return if (remaining == 0) STEP_SECONDS else remaining
     }
@@ -51,9 +61,14 @@ object GuardCrypto {
      * Milliseconds elapsed inside the 15-second window (0..14999ms)
      * For buttery smooth circular progress animation
      */
-    fun getWindowProgressFraction(nowMs: Long = System.currentTimeMillis()): Float {
-        val windowMs = nowMs % (STEP_SECONDS * 1000L)
-        return windowMs.toFloat() / (STEP_SECONDS * 1000f)
+    fun getWindowProgressFraction(
+        nowMs: Long = System.currentTimeMillis(),
+        timeOffsetMs: Long = 0L
+    ): Float {
+        val effectiveNowMs = nowMs + timeOffsetMs
+        val stepMs = STEP_SECONDS * 1000L
+        val windowMs = ((effectiveNowMs % stepMs) + stepMs) % stepMs
+        return windowMs.toFloat() / stepMs.toFloat()
     }
 
     private fun hexStringToByteArray(s: String): ByteArray {
